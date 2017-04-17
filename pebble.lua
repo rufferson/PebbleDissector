@@ -1,6 +1,11 @@
 --[[
 -- vim: ts=4 sts=4 et
 
+Inspired by: https://github.com/pieterjm/PebbleDissector
+
+Copyright (c) 2017 Ruslan N. Marchenko
+License: LGPLv3 https://www.gnu.org/licenses/lgpl-3.0.en.html
+
 --]]
 --
 local pebble_proto = Proto("pebble","Pebble Serial Protocol")
@@ -409,7 +414,17 @@ local lookup_endpoint = {
     end
 	},
  [18] = {
-	name = "SYSTEM_MESSAGE"
+	name = "SYSTEM_MESSAGE",
+    dissector = function(buffer,pinfo,tree)
+        local type = buffer(1,1):uint()
+        tree:add(buffer(0,1),"Command: "..buffer(0,1))
+        tree:add(pebble_type, buffer(1,1))
+        local types = {"FwUpdateAvailable","FwUpdateStart","FwUpdateComplete","FwUpdateFailed","FwUpToDate","StopReconnecting","StartReconnecting","MAPDisabled","MAPEnabled","FwUpdateStartResponse"}
+        pinfo.cols.info:append(" ("..types[type+1]..":"..buffer(0,1)..")")
+        if type == 10 and buffer:len() > 2 then
+            tree:add(buffer(2,1),"Response: "..buffer(2,1))
+        end
+    end
 	},
  [32] = {
 	name = "MUSIC_CONTROL",
@@ -454,7 +469,16 @@ local lookup_endpoint = {
 	name = "LOGS"
 	},
  [2001] = {
-	name = "PING"
+	name = "PING",
+    dissector = function(buffer,pinfo,tree)
+        local type = buffer(0,1):uint()
+        tree:add(pebble_type, buffer(0,1))
+        tree:add(buffer(1,4),"Cookie: "..buffer(1,4))
+        if type == 0 then
+            tree:add(buffer(5,1),"Idle: "..buffer(5,1))
+        end
+        pinfo.cols.info:append(" ("..(type == 1 and "Pong" or "Ping")..")")
+    end
 	},
  [2002] = {
 	name = "LOG_DUMP"
@@ -498,7 +522,21 @@ local lookup_endpoint = {
 	name = "APP_MANAGER"
 	},
  [6001] = {
-	name = "APP_FETCH"
+	name = "APP_FETCH",
+    dissector = function(buffer,pinfo,tree)
+        local type = buffer(0,1):uint()
+        tree:add(pebble_type, buffer(0,1))
+        if buffer:len() > 2 then
+            tree:add(buffer(1,16),"AppUUID: "..uuid(buffer(1,16)))
+            tree:add(buffer(17,4),"AppID: "..buffer(17,4):uint())
+            pinfo.cols.info:append(" (Fetch["..type.."]) "..uuid(buffer(1,16)));
+        else
+            local status = {"Start","Busy","InvalidUUID","NoData"}
+            local code = buffer(1,1):uint()
+            tree:add(buffer(1,1),"Status: "..status[code].."["..code.."]")
+            pinfo.cols.info:append(" ("..status[code].."["..code.."])")
+        end
+    end
 	},
  [6778] = {
     name = "DATA_LOG",
