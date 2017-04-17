@@ -538,7 +538,43 @@ local lookup_endpoint = {
     end
 	},
  [48879] = {
-	name = "PUTBYTES"
+    name = "PUTBYTES",
+    dissector = function(buffer,pinfo,tree)
+        local type = buffer(0,1):uint()
+        tree:add(pebble_type, buffer(0,1))
+        if buffer:len() == 5 and type < 3 then
+            local res = {"ACK","NACK"}
+            pinfo.cols.info:append(" (" .. res[type] .. ")")
+            tree:add(buffer(1,4),"Cookie: "..buffer(1,4))
+            return 5
+        end
+        local cmds = {"Init","Put","Commit","Abort","Install"}
+        pinfo.cols.info:append(" (" .. cmds[type] .. ")")
+        if type == 1 then
+            tree:add(buffer(1,4),"Object Size: "..buffer(1,4):uint())
+            local types = {"Firmware","Recovery","SysResource","AppResource","AppBinary","File","Worker"}
+            local app = buffer(5,1):bitfield(0)
+            local objt = buffer(5,1):uint()
+            objt = app and objt - 128 or objt
+            local objn = types[objt] or "Unknown"
+            tree:add(buffer(5,1),"Object Type: "..objn.."["..objt.."] - "..(app and "AppBundle" or "SysBundle"))
+            if app then
+                tree:add(buffer(6,4),"AppID: "..buffer(6,4):uint())
+            else
+                tree:add(buffer(6,1),"Bank: "..buffer(6,1):uint())
+                tree:add(buffer(7),"FileName: "..buffer(7):stringz(ENC_UTF8))
+            end
+        else
+            tree:add(buffer(1,4),"Cookie: "..buffer(1,4))
+            if type == 2 then
+                local size = buffer(5,4):uint()
+                tree:add(buffer(5,4),"Data Size: "..size)
+                data:call(buffer(9,(size < (buffer:len() - 9)) and size or nil):tvb(),pinfo,tree)
+            elseif type == 3 then
+                tree:add(buffer(5,4),"Data CRC: "..buffer(5,4))
+            end
+        end
+    end
 	},
  [10000] = {
 	name = "AUDIO"
