@@ -540,7 +540,30 @@ local lookup_endpoint = {
 	name = "SCREENSHOT"
 	},
  [9000] = {
-	name = "COREDUMP"
+    name = "GETBYTES",
+    dissector = function(buffer,pinfo,tree)
+        local type = buffer(0,1):uint()
+        tree:add(pebble_type, buffer(0,1))
+        tree:add(buffer(1,1),"TransactionID: "..buffer(1,1))
+        local types = {"CoredumpRequest","InfoResponse","DataResponse","FileRequest","FlashRequest","UnreadCoredumpRequest"}
+        pinfo.cols.info:append(" ("..buffer(1,1)..":"..types[type+1]..")")
+        if type == 1 then
+            local errs = {"Success","MalformedRequest","InProgress","DoesNotExist","Corrupted"}
+            local err = buffer(2,1):uint()
+            pinfo.cols.info:append(" ["..errs[err+1].."]")
+            tree:add(buffer(2,1),"Status: "..errs[err+1].."["..err.."]")
+            tree:add(buffer(3,4),"Length: "..buffer(3,4):uint())
+        elseif type == 2 then
+            tree:add(buffer(2,4),"Offset: "..buffer(2,4):uint())
+            data:call(buffer(6):tvb(),pinfo,tree)
+        elseif type == 3 then
+            tree:add(buffer(2),"Filename: "..buffer(3,buffer(2,1):uint()):stringz(ENC_UTF8))
+        elseif type == 4 then
+            tree:add(buffer(2,4),"Offset: "..buffer(2,4):uint())
+            tree:add(buffer(6,4),"Length: "..buffer(6,4):uint())
+        end
+    end
+
 	},
  [45531] = {
 	name = "BLOB_DB",
