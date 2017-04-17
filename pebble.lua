@@ -494,21 +494,47 @@ local lookup_endpoint = {
         end
     end
 	},
- [6778] = {
-    name = "DATA_LOG",
-    dissector = function(buffer,pinfo,tree) 
-       	local type = buffer(0,1):uint()
-       	local logid = buffer(1,1):uint()  
-       	tree:add(pebble_type, buffer(0,1))
-       	tree:add(buffer(1,1),"Log Id: " .. logid)
-       	pinfo.cols.info:append(" (" .. type .. ")")
-    end
-	},
  [6000] = {
 	name = "APP_MANAGER"
 	},
  [6001] = {
 	name = "APP_FETCH"
+	},
+ [6778] = {
+    name = "DATA_LOG",
+    dissector = function(buffer,pinfo,tree) 
+       	local type = buffer(0,1):uint()
+        local dir = 0
+        local log_type = {"DespoolOpenSession","DespoolSendData","CloseSession","ReportOpenSession","ACK","NACK","Timeout","EmptySession","GetSendEnableReq","GetSendEnableResp","SetSendEnable"}
+       	tree:add(pebble_type, buffer(0,1))
+        if type < 4 or type == 0x85 or type == 0x86 or type == 0x88 then
+       	    tree:add(buffer(1,1),"SessionID: "..buffer(1,1))
+       	    pinfo.cols.info:append(" ("..buffer(1,1)..":"..log_type[type > 127 and type - 128 or type]..")")
+            if type == 1 then
+                local sub = tree:add(buffer(2,27),"OpenSession")
+                sub:add(buffer(2,16),"AppUUID: "..uuid(buffer(2,16)))
+                sub:add(buffer(18,4),"Timestamp: "..format_date(buffer(18,4):le_uint()))
+                sub:add(buffer(22,4),"LogTag: "..buffer(22,4):le_uint())
+                local dits = {[0] = "ByteArray", [1] = "Unsigned", [2] = "Integer"}
+                sub:add(buffer(26,1),"DataItemType: "..dits[buffer(26,1):uint()].."["..buffer(26,1):uint().."]")
+                sub:add(buffer(27,2),"DataItemSize: "..buffer(27,2):le_uint())
+            elseif type == 2 then
+                tree:add(buffer(2,4),"ItemsLeft: "..buffer(2,4):le_uint())
+                tree:add(buffer(6,4),"DataCRC: "..buffer(6,4))
+                data:call(buffer(10):tvb(),pinfo,tree)
+            end
+        else
+       	    pinfo.cols.info:append(" ("..log_type[type > 127 and type - 128 or type]..")")
+            if type == 0x84 then
+                local sub = tree:add(buffer(1),"Open Sessions["..(buffer:len()-1).."]")
+                for i=1,buffer:len() do
+                    sub:add(buffer(i,1),"Session "..buffer(i,1))
+                end
+            elseif type == 0x0a or type == 0x8b then
+                tree:add(buffer(1,1),"Enabled: "..buffer(1,1))
+            end
+        end
+    end
 	},
  [8000] = {
 	name = "SCREENSHOT"
