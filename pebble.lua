@@ -439,7 +439,22 @@ local lookup_endpoint = {
     end
 	},
  [33] = {
-	name = "PHONE_CONTROL"
+    name = "PHONE_CONTROL",
+    dissector = function(buffer,pinfo,tree)
+        local type = buffer(0,1):uint()
+        local cmds = {"Answer","Hangup","StateRequest","StateResponse","Incoming","Outgoing","Missed","Ring","CallStart","CallEnd"}
+        tree:add(pebble_type, buffer(0,1))
+        pinfo.cols.info:append(" ("..cmds[type < 128 and type or type - 128]..":"..buffer(1,4)..")")
+        if type == 4 or type == 6 then
+            local len = buffer(5,1):uint()
+            tree:add("Number: "..buffer(6,len):string(ENC_UTF8))
+            tree:add("Name: "..buffer(7+len,buffer(6+len,1):uint()):string(ENC_UTF8))
+            pinfo.cols.info:append(" "..buffer(6,len):string(ENC_UTF8))
+        elseif type == 0x83 then
+            local cnt = buffer(5,1):uint()
+            local sub = tree:add(buffer(6),"Items["..cnt.."]")
+        end
+    end
 	},
  [48] = {
 	name = "APPLICATION_MESSAGE",
@@ -602,8 +617,47 @@ local lookup_endpoint = {
         end
     end
 
-	},
- [45531] = {
+  },
+  [10000] = {
+    name = "AUDIO",
+    dissector = function(buffer,pinfo,tree)
+        local type = buffer(0,1):uint()
+        tree:add(pebble_type, buffer(0,1))
+        tree:add(buffer(1,2),"SessionID: "..buffer(1,2))
+        pinfo.cols.info:append(" ("..(type == 2 and "Data" or "Stop")..":"..buffer(1,2)..")")
+        if type == 2 then
+            local fc = buffer(3,1):uint()
+            local sub = tree:add(buffer(3),"Frames["..fc.."]")
+            data:call(buffer(4):tvb(),pinfo,sub)
+        end
+    end
+  },
+  [11000] = {
+    name = "VOICE",
+    dissector = function(buffer,pinfo,tree)
+        local type = buffer(0,1):uint()
+        local types = {"SessionSetup","DictationResult"}
+        tree:add(pebble_type, buffer(0,1))
+        tree:add(buffer(1,4),"Flags: "..buffer(1,4))
+        pinfo.cols.info:append(" ("..types[type]..")")
+        if type == 1 and buffer:len() > 7 then
+            tree:add(buffer(5,1),"SessionType: "..buffer(5,1):uint())
+            tree:add(buffer(6,2),"Session ID: "..buffer(6,2):uint())
+        else
+            local cmd = {"SessionSetup","DictationResult"}
+            local res = {"Success","ServiceUnavailable","Timeout","RecognizerError","InvalidResponse","Disabled","InvalidMessage"}
+            tree:add(buffer(5,1),"SessionType: "..cmd[buffer(5,1):uint()].."["..buffer(5,1):uint().."]")
+            tree:add(buffer(5,1),"SetupResult: "..res[buffer(6,1):uint()+1].."["..buffer(6,1):uint().."]")
+        end
+    end
+  },
+  [11440] = {
+        name = "ACTION"
+  },
+  [43981] = {
+        name = "SORTING"
+  },
+  [45531] = {
 	name = "BLOB_DB",
     dissector = function(buffer,pinfo,tree) 
         if buffer:len() == 3 then
@@ -624,7 +678,10 @@ local lookup_endpoint = {
         end
     end
 	},
- [48879] = {
+  [45787] = {
+        name = "BLOB_UPDATE"
+  },
+  [48879] = {
     name = "PUTBYTES",
     dissector = function(buffer,pinfo,tree)
         local type = buffer(0,1):uint()
@@ -662,9 +719,6 @@ local lookup_endpoint = {
             end
         end
     end
-	},
- [10000] = {
-	name = "AUDIO"
   }
 }
 local frag = {}
