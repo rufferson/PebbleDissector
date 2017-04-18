@@ -158,7 +158,7 @@ local musCmd = {
         end
     }
 }
-local function dissectAttrs(buffer,count,atts)
+local function parseAttrs(buffer,count,atts)
     local off = 0
     for i = 1,count do
         atts[i] = {
@@ -179,7 +179,7 @@ local function dissectLayout(buffer,pinfo,tree)
     sub:add(buffer(2,1),"AttributeNum: "..atc)
     sub:add(buffer(3,1),"ActionNum: "..acc)
     local atrs = {}
-    local atrlen = dissectAttrs(buffer(4),atc,atrs)
+    local atrlen = parseAttrs(buffer(4),atc,atrs)
     local attsub = sub:add(buffer(4,atrlen),"Attributes".."["..atc.."]")
     local actsub = sub:add(buffer(4+atrlen),"Actions".."["..acc.."]")
     local off = 4 + atrlen
@@ -188,7 +188,7 @@ local function dissectLayout(buffer,pinfo,tree)
         local id = buffer(off,1)
         local type = buffer(off+1,1)
         local aatc = buffer(off+2,1):uint()
-        local atln = dissectAttrs(buffer(off+3),aatc,aats)
+        local atln = parseAttrs(buffer(off+3),aatc,aats)
         local item = actsub:add(buffer(off,3+atln),"Action "..id:uint())
         item:add(id,"ID: "..id:uint())
         item:add(type,"Type: "..type:uint())
@@ -250,7 +250,38 @@ local blobs = {
     },
     [8] = {
         name = "Contact",
-        disk = uuid
+        disk = uuid,
+        disv = function(buffer,pinfo,tree)
+            tree:add(buffer(0,16),"Contact UUID: "..uuid(buffer(0,16)))
+            tree:add(buffer(16,4),"Flags: "..buffer(16,4))
+            local atc = buffer(20,1):uint()
+            local mtc = buffer(21,1):uint()
+            local off = 22
+            for i=1,atc do
+                local aid = buffer(off,1):uint()
+                local len = buffer(off+1,2):le_uint()
+                if aid == 1 then
+                    tree:add(buffer(off,3+len),"Title["..i.."]: "..buffer(off+3,len):string(ENC_UTF8))
+                else
+                    tree:add(buffer(off,3+len),"Attribute "..i)
+                end
+                off = off + 3 + len
+            end
+            for i=1,mtc do
+                local len = buffer(off+19,2):le_uint()
+                local sub = tree:add(buffer(off,21+len),"Method "..i)
+                sub:add(buffer(off,16),"UUID: "..uuid(buffer(off,16)))
+                sub:add(buffer(off+16,1),"Type: "..buffer(off+16,1):uint())
+                sub:add(buffer(off+17,1),"MNum: "..buffer(off+17,1):uint())
+                local aid = buffer(off+18,1):uint()
+                if aid == 0x27 then
+                    sub:add(buffer(off+18,3+len),"Number["..i.."]: "..buffer(off+21,len):string(ENC_UTF8))
+                else
+                    sub:add(buffer(off+18,3+len),"Attribute "..i)
+                end
+                off = off + len + 21
+            end
+        end
     },
     [9] = {
         name = "Settings",
@@ -580,7 +611,7 @@ local lookup_endpoint = {
        	    pinfo.cols.info:append(" ("..log_type[type > 127 and type - 128 or type]..")")
             if type == 0x84 then
                 local sub = tree:add(buffer(1),"Open Sessions["..(buffer:len()-1).."]")
-                for i=1,buffer:len() do
+                for i=1,(buffer:len()-1) do
                     sub:add(buffer(i,1),"Session "..buffer(i,1))
                 end
             elseif type == 0x0a or type == 0x8b then
@@ -655,7 +686,19 @@ local lookup_endpoint = {
         name = "ACTION"
   },
   [43981] = {
-        name = "SORTING"
+    name = "SORTING",
+    dissector = function(buffer,pinfo,tree)
+        local type = buffer(0,1):uint()
+        tree:add(pebble_type, buffer(0,1))
+        pinfo.cols.info:append(" (SetAppOrder:"..type..")")
+        if buffer:len() > 1 then
+            local cnt = buffer(1,1):uint()
+            local sub = tree:add(buffer(1),"AppOrder["..cnt.."]")
+            for i = 1,cnt do
+                sub:add(buffer(2+16*(i-1),16),"UUID: "..uuid(buffer(2+16*(i-1),16)))
+            end
+        end
+    end
   },
   [45531] = {
 	name = "BLOB_DB",
