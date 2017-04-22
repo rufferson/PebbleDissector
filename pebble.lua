@@ -28,7 +28,7 @@ local function uuid(buf)
     return buf(0,4).."-"..buf(4,2).."-"..buf(6,2).."-"..buf(8,2).."-"..buf(10,6)
 end
 local function utfs(buffer)
-    return buffer:string(ENC_UTF8)
+    return buffer:string(ENC_UTF_8)
 end
 
 local lookup_amsg = {
@@ -106,9 +106,9 @@ local musCmd = {
             local alen = buffer(plen+1,1):uint()
             local tlen = buffer(plen+alen+2,1):uint()
             local sub = tree:add(buffer(),"UpdateCurrentTrack",buffer())
-            sub:add(buffer(1,plen),"Artist: "..buffer(1,plen):string(ENC_UTF8))
-            sub:add(buffer(2+plen,alen),"Album: "..buffer(2+plen,alen):string(ENC_UTF8))
-            sub:add(buffer(3+plen+alen,tlen),"Title: "..buffer(3+plen+alen,tlen):string(ENC_UTF8))
+            sub:add(buffer(1,plen),"Artist: "..buffer(1,plen):string(ENC_UTF_8))
+            sub:add(buffer(2+plen,alen),"Album: "..buffer(2+plen,alen):string(ENC_UTF_8))
+            sub:add(buffer(3+plen+alen,tlen),"Title: "..buffer(3+plen+alen,tlen):string(ENC_UTF_8))
             local off = 3+plen+alen+tlen
             if off < buffer:len() then
                 sub:add(buffer(off,4),"Length: "..buffer(off,4):uint())
@@ -152,9 +152,9 @@ local musCmd = {
         dissector = function(buffer,pinfo,tree)
             local sub = tree:add(buffer(),"UpdatePlayerInfo",buffer())
             local len = buffer(0,1):uint()
-            sub:add(buffer(0,1+len),"Package: "..buffer(1,len):string(ENC_UTF8))
+            sub:add(buffer(0,1+len),"Package: "..buffer(1,len):string(ENC_UTF_8))
             local nln = buffer(1+len,1):uint()
-            sub:add(buffer(1+len,1+nln),"Name: "..buffer(2+len,nln):string(ENC_UTF8))
+            sub:add(buffer(1+len,1+nln),"Name: "..buffer(2+len,nln):string(ENC_UTF_8))
         end
     }
 }
@@ -170,19 +170,41 @@ local function parseAttrs(buffer,count,atts)
     end
     return off
 end
-local function dissectLayout(buffer,pinfo,tree)
-    local size = buffer(0,2):le_uint()
-    local sub = tree:add(buffer(0,size+4),"Layout")
-    sub:add(buffer(0,2),"Size: "..size)
-    local atc = buffer(2,1):uint()
-    local acc = buffer(3,1):uint()
-    sub:add(buffer(2,1),"AttributeNum: "..atc)
-    sub:add(buffer(3,1),"ActionNum: "..acc)
+local function showAttrs(atts,tree)
+    for i,v in ipairs(atts) do
+        if v.id:int() == 1 then
+            tree:add(v.data,"Attribute "..i..": "..v.data(0,v.len:le_uint()):string(ENC_UTF_8))
+        elseif v.id:int() == 8 then
+            local sub = tree:add(v.data,"Attribute "..i)
+            sub:add(v.id,"AttID: "..v.id:uint())
+            sub:add(v.len,"AttLen: "..v.len:le_uint())
+            local off = 0
+            for i=0,v.len:le_uint() do
+                if i == v.len:le_uint() or v.data(i,1):int() == 0 then
+                    sub:add(v.data(off, (i<v.len:le_uint() and i+1 or i)-off),v.data(off,i-off):string(ENC_UTF_8))
+                    off = i+1
+                end
+            end
+        else
+            local sub = tree:add(v.data,"Attribute "..i)
+            sub:add(v.id,"AttID: "..v.id:uint())
+            sub:add(v.len,"AttLen: "..v.len:le_uint())
+            sub:add(v.data,"Data: "..v.data)
+        end
+    end
+end
+local function dissectLayout(buffer,pinfo,sub)
+    local atc = buffer(0,1):uint()
+    local acc = buffer(1,1):uint()
+    sub:add(buffer(0,1),"AttributeNum: "..atc)
+    sub:add(buffer(1,1),"ActionNum: "..acc)
     local atrs = {}
-    local atrlen = parseAttrs(buffer(4),atc,atrs)
-    local attsub = sub:add(buffer(4,atrlen),"Attributes".."["..atc.."]")
-    local actsub = sub:add(buffer(4+atrlen),"Actions".."["..acc.."]")
-    local off = 4 + atrlen
+    local atrlen = parseAttrs(buffer(2),atc,atrs)
+    local attsub = sub:add(buffer(2,atrlen),"Attributes".."["..atc.."]")
+    showAttrs(atrs,attsub)
+    local actsub = sub:add(buffer(2+atrlen),"Actions".."["..acc.."]")
+    local off = 2 + atrlen
+    local actType = {"AncsDismiss","Generic","Response","Dismiss","HTTP","Snooze","OpenApp","Empty","Remove","OpenPin"}
     for i = 1, acc do
         local aats = {}
         local id = buffer(off,1)
@@ -191,7 +213,9 @@ local function dissectLayout(buffer,pinfo,tree)
         local atln = parseAttrs(buffer(off+3),aatc,aats)
         local item = actsub:add(buffer(off,3+atln),"Action "..id:uint())
         item:add(id,"ID: "..id:uint())
-        item:add(type,"Type: "..type:uint())
+        item:add(type,"Type: "..actType[type:uint()].."["..type:uint().."]")
+        local aatsub = item:add(buffer(off+2,1+atln),"Attributes["..aatc.."]")
+        showAttrs(aats,aatsub)
         off = off + 3 + atln
     end
 end
@@ -205,7 +229,10 @@ local dissectTimeline = function(buffer,pinfo,tree)
     sub:add(buffer(38,1),"Type: "..type[buffer(38,1):uint()].."["..buffer(38,1):uint().."]")
     sub:add(buffer(39,2),"Flags: "..buffer(39,2))
     sub:add(buffer(41,1),"Layout: "..buffer(41,1):uint())
-    dissectLayout(buffer(42),pinfo,sub)
+    local size = buffer(42,2):le_uint()
+    local lsub = tree:add(buffer(42,size+4),"Layout")
+    lsub:add(buffer(42,2),"Size: "..size)
+    dissectLayout(buffer(44,size+2),pinfo,lsub)
 end
 local blobs = {
     [0] = { name = "Test" },
@@ -226,7 +253,7 @@ local blobs = {
             sub:add(buffer(26,2),"SdkVer: "..buffer(26,1):uint().."."..buffer(27,1):uint())
             sub:add(buffer(28,1),"AppFaceBgColor: "..buffer(28,1))
             sub:add(buffer(29,1),"AppFaceTemplate: "..buffer(29,1):uint())
-            sub:add(buffer(30,96),"AppName: "..buffer(30,96):stringz(ENC_UTF8))
+            sub:add(buffer(30,96),"AppName: "..buffer(30,96):stringz(ENC_UTF_8))
         end
     },
     [3] = {
@@ -239,10 +266,20 @@ local blobs = {
         disk = uuid,
         disv = dissectTimeline
     },
-    [5] = { name = "Weather" },
+    [5] = {
+        name = "Weather",
+        disv = function(buffer,pinfo,tree)
+            tree:add(buffer(0,1),"Type: "..buffer(0,1):uint())
+            tree:add(buffer(1,2),"Current Temperature: "..buffer(1,2):le_int())
+        end
+    },
     [6] = {
         name = "SendText",
-        disk = utfs
+        disk = utfs,
+        disv = function(buffer,pinfo,tree)
+            tree:add(buffer(0,4),"Flags: "..buffer(0,4))
+            dissectLayout(buffer(4),pinfo,tree)
+        end
     },
     [7] = {
         name = "Health",
@@ -261,7 +298,7 @@ local blobs = {
                 local aid = buffer(off,1):uint()
                 local len = buffer(off+1,2):le_uint()
                 if aid == 1 then
-                    tree:add(buffer(off,3+len),"Title["..i.."]: "..buffer(off+3,len):string(ENC_UTF8))
+                    tree:add(buffer(off,3+len),"Title["..i.."]: "..buffer(off+3,len):string(ENC_UTF_8))
                 else
                     tree:add(buffer(off,3+len),"Attribute "..i)
                 end
@@ -275,7 +312,7 @@ local blobs = {
                 sub:add(buffer(off+17,1),"MNum: "..buffer(off+17,1):uint())
                 local aid = buffer(off+18,1):uint()
                 if aid == 0x27 then
-                    sub:add(buffer(off+18,3+len),"Number["..i.."]: "..buffer(off+21,len):string(ENC_UTF8))
+                    sub:add(buffer(off+18,3+len),"Number["..i.."]: "..buffer(off+21,len):string(ENC_UTF_8))
                 else
                     sub:add(buffer(off+18,3+len),"Attribute "..i)
                 end
@@ -308,6 +345,11 @@ local blobCmd = {
             pinfo.cols.info:append(" "..key)
             if b.disv then
                 b.disv(buffer(3+klen,vlen),pinfo,sub)
+            else
+                local val = buffer(1+klen,vlen<buffer:len() and 2+vlen or buffer:len() - 1 - klen)
+                local vsub = sub:add(val,"Value:")
+                vsub:add(val(0,2),"Length: "..vlen)
+                data:call(val(2):tvb(),pinfo,vsub)
             end
         end
     },
@@ -372,7 +414,7 @@ local lookup_endpoint = {
             tree:add(buffer(1,4),"Time: "..format_date(buffer(1,4):uint()))
             tree:add(buffer(5,2),"Offset: "..buffer(5,2):int())
             local len = buffer(7,1):uint()
-            tree:add(buffer(7,1+len),"Zone: "..buffer(8,len):string(ENC_UTF8))
+            tree:add(buffer(7,1+len),"Zone: "..buffer(8,len):string(ENC_UTF_8))
         end
     end
   },
@@ -478,9 +520,9 @@ local lookup_endpoint = {
         pinfo.cols.info:append(" ("..cmds[type < 128 and type or type - 128]..":"..buffer(1,4)..")")
         if type == 4 or type == 6 then
             local len = buffer(5,1):uint()
-            tree:add("Number: "..buffer(6,len):string(ENC_UTF8))
-            tree:add("Name: "..buffer(7+len,buffer(6+len,1):uint()):string(ENC_UTF8))
-            pinfo.cols.info:append(" "..buffer(6,len):string(ENC_UTF8))
+            tree:add("Number: "..buffer(6,len):string(ENC_UTF_8))
+            tree:add("Name: "..buffer(7+len,buffer(6+len,1):uint()):string(ENC_UTF_8))
+            pinfo.cols.info:append(" "..buffer(6,len):string(ENC_UTF_8))
         elseif type == 0x83 then
             local cnt = buffer(5,1):uint()
             local sub = tree:add(buffer(6),"Items["..cnt.."]")
@@ -555,7 +597,7 @@ local lookup_endpoint = {
         local len = buffer(1,1):uint()
         if type == 0 then
        		pinfo.cols.info:append(" (Request)")
-            tree:add(buffer(2,len),"Key: "..buffer(2,len):string(ENC_UTF8))
+            tree:add(buffer(2,len),"Key: "..buffer(2,len):string(ENC_UTF_8))
         elseif type == 1 then
        		pinfo.cols.info:append(" (Response)")
             tree:add(buffer(2,len),"Value: "..buffer(2,len).."["..buffer(2,4):uint().."]")
@@ -574,7 +616,7 @@ local lookup_endpoint = {
         tree:add(pebble_type, buffer(0,1))
         if buffer:len() > 2 then
             tree:add(buffer(1,16),"AppUUID: "..uuid(buffer(1,16)))
-            tree:add(buffer(17,4),"AppID: "..buffer(17,4):uint())
+            tree:add(buffer(17,4),"AppID: "..buffer(17,4):le_uint())
             pinfo.cols.info:append(" (Fetch["..type.."]) "..uuid(buffer(1,16)));
         else
             local status = {"Start","Busy","InvalidUUID","NoData"}
@@ -641,7 +683,7 @@ local lookup_endpoint = {
             tree:add(buffer(2,4),"Offset: "..buffer(2,4):uint())
             data:call(buffer(6):tvb(),pinfo,tree)
         elseif type == 3 then
-            tree:add(buffer(2),"Filename: "..buffer(3,buffer(2,1):uint()):stringz(ENC_UTF8))
+            tree:add(buffer(2),"Filename: "..buffer(3,buffer(2,1):uint()):stringz(ENC_UTF_8))
         elseif type == 4 then
             tree:add(buffer(2,4),"Offset: "..buffer(2,4):uint())
             tree:add(buffer(6,4),"Length: "..buffer(6,4):uint())
@@ -718,6 +760,8 @@ local lookup_endpoint = {
        	pinfo.cols.info:append(" "..buffer(1,2).." ("..b.name..":"..c.name..")")
         if c.dissector then
             c.dissector(buffer(4),pinfo,tree,blob)
+        else
+            tree:add(buffer(3,1),"BlobDB: "..b.name.."["..blob.."]")
         end
     end
 	},
@@ -749,7 +793,7 @@ local lookup_endpoint = {
                 tree:add(buffer(6,4),"AppID: "..buffer(6,4):uint())
             else
                 tree:add(buffer(6,1),"Bank: "..buffer(6,1):uint())
-                tree:add(buffer(7),"FileName: "..buffer(7):stringz(ENC_UTF8))
+                tree:add(buffer(7),"FileName: "..buffer(7):stringz(ENC_UTF_8))
             end
         else
             tree:add(buffer(1,4),"Cookie: "..buffer(1,4))
