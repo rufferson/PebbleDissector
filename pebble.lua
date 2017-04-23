@@ -164,7 +164,7 @@ local function parseAttrs(buffer,count,atts)
         atts[i] = {
             id = buffer(off,1),
             len = buffer(off+1,2),
-            data = buffer(off+3,len)
+            data = buffer(off+3,buffer(off+1,2):le_uint())
         }
         off = off + atts[i].len:le_uint() + 3
     end
@@ -172,9 +172,9 @@ local function parseAttrs(buffer,count,atts)
 end
 local function showAttrs(atts,tree)
     for i,v in ipairs(atts) do
-        if v.id:int() == 1 then
+        if v.id:int() < 4 or (v.id:int() > 10 and v.id:int() < 23 and v.id:int() ~= 14) or v.id:int() == 36 or v.id:int() == 47 then
             tree:add(v.data,"Attribute "..i..": "..v.data(0,v.len:le_uint()):string(ENC_UTF_8))
-        elseif v.id:int() == 8 then
+        elseif v.id:int() == 8 or v.id:int() == 25 or v.id:int() == 26 then
             local sub = tree:add(v.data,"Attribute "..i)
             sub:add(v.id,"AttID: "..v.id:uint())
             sub:add(v.len,"AttLen: "..v.len:le_uint())
@@ -230,9 +230,10 @@ local dissectTimeline = function(buffer,pinfo,tree)
     sub:add(buffer(39,2),"Flags: "..buffer(39,2))
     sub:add(buffer(41,1),"Layout: "..buffer(41,1):uint())
     local size = buffer(42,2):le_uint()
-    local lsub = tree:add(buffer(42,size+4),"Layout")
+    local elen = (size+2 < buffer:len() and size+2 or buffer:len() - 44)
+    local lsub = tree:add(buffer(42,elen+2),"Layout")
     lsub:add(buffer(42,2),"Size: "..size)
-    dissectLayout(buffer(44,size+2),pinfo,lsub)
+    dissectLayout(buffer(44,elen),pinfo,lsub)
 end
 local blobs = {
     [0] = { name = "Test" },
@@ -338,15 +339,17 @@ local blobCmd = {
         dissector = function(buffer,pinfo,tree,blob)
             local klen = buffer(0,1):uint()
             local vlen = buffer(1+klen,2):le_uint()
+            local elen = ((vlen+2+klen)<buffer:len() and vlen or buffer:len() - 3 - klen)
             local sub = tree:add(buffer(),"InsertCommand")
             local b = blobs[blob]
             local key = (b.disk and b.disk(buffer(1,klen)) or buffer(1,klen))
             sub:add(buffer(0,1+klen),"Key: "..key)
+            sub:add(buffer(1+klen,2),"Value Length: "..vlen)
             pinfo.cols.info:append(" "..key)
             if b.disv then
-                b.disv(buffer(3+klen,vlen),pinfo,sub)
+                b.disv(buffer(3+klen,elen),pinfo,sub)
             else
-                local val = buffer(1+klen,vlen<buffer:len() and 2+vlen or buffer:len() - 1 - klen)
+                local val = buffer(1+klen,2+elen)
                 local vsub = sub:add(val,"Value:")
                 vsub:add(val(0,2),"Length: "..vlen)
                 data:call(val(2):tvb(),pinfo,vsub)
